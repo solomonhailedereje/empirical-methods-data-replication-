@@ -127,3 +127,56 @@ print(round(coeftest(cb2$m, vcov = cb2$V)[c("high_la1", "high_la2", "high_not0")
 # Paper col 1: -0.105 (0.046), -0.0273 (0.033)
 # Paper col 2: -0.0853 (0.062), -0.12 (0.053), -0.027 (0.032)
 # Our col-2 SEs are slightly larger (0.064, 0.055, 0.033): small unexplained difference.
+
+
+# =============================================================================
+# Extension: randomization inference for Table 3, column (1)
+# Reassign the A/B labels across the 42 participants (group sizes kept),
+# rebuild the treatment dummy and re-estimate. Two-sided p-value.
+# =============================================================================
+set.seed(1)
+p   <- filter(t14, maxhigh == 1)
+ids <- p %>% group_by(fahrer) %>% summarise(odd = first(odd))   # A = odd 1
+
+delta_hat <- function(odd_new) {
+  g <- odd_new[match(p$fahrer, ids$fahrer)]
+  # treated in block 2 if group A, in block 3 if group B
+  h <- as.integer((g == 1 & p$block == 2) | (g == 0 & p$block == 3))
+  coef(lm(p$totrev ~ h + p$block2 + p$block3 + factor(p$fahrer)))["h"]
+}
+obs  <- delta_hat(ids$odd)
+sims <- replicate(2000, delta_hat(sample(ids$odd)))
+print(c(observed     = unname(obs),
+        null_sd      = sd(sims),
+        p_value      = mean(abs(sims) >= abs(obs)),
+        p_value_cons = (1 + sum(abs(sims) >= abs(obs))) / (1 + length(sims))))
+# Expected: observed 1033.56, null_sd 310.82, p_value 0.0005
+
+ri_plot <- ggplot(data.frame(sims = sims), aes(sims)) +
+  geom_histogram(bins = 40, fill = "grey70", colour = "white") +
+  geom_vline(xintercept = obs, colour = "red", linewidth = 1) +
+  labs(x = "Estimated treatment effect (CHF)", y = "Frequency")
+print(ri_plot)
+ggsave("output/figure_ri.png", ri_plot, width = 6.5, height = 4, dpi = 300)
+
+# =============================================================================
+# Robustness 1: Table 5 with SEs clustered on messenger instead of day
+# =============================================================================
+for (m in list(m1, m2)) {
+  ct <- coeftest(m, vcov = vcovCL(m, cluster = s$fahrer, type = "HC1", cadjust = TRUE))
+  print(round(ct["high", ], 4))
+}
+# Expected: -0.0642 (0.0271); -0.0601 (0.0301)
+
+# =============================================================================
+# Robustness 2: Table 5 without messengers 7 and 10 (no group code)
+# =============================================================================
+s_rob <- s %>% filter(!fahrer %in% c(7, 10))
+r1 <- lm(lnum ~ high + lnten + female + factor(datum), data = s_rob)
+r2 <- lm(as.formula(paste("lnum ~ high + lnten +", fs, "+ factor(datum)")), data = s_rob)
+for (m in list(r1, r2)) {
+  ct <- coeftest(m, vcov = vcovCL(m, cluster = s_rob$datum, type = "HC1", cadjust = TRUE))
+  print(round(ct["high", ], 4))
+  cat("N =", nobs(m), "\n\n")
+}
+# Expected: -0.0697 (0.0299); -0.0599 (0.0297); N = 1128
